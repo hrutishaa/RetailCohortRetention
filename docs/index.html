@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Retail Cohort Retention</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="results.js"></script>
+<style>
+  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; background: #f6f7f9; color: #1d2330; }
+  header { background: #1d2330; color: #fff; padding: 22px 32px; }
+  header h1 { margin: 0 0 4px; font-size: 22px; }
+  header p { margin: 0; opacity: .8; font-size: 14px; }
+  main { max-width: 1180px; margin: 0 auto; padding: 20px 24px 40px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+  .card { background: #fff; border-radius: 8px; padding: 14px 16px; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+  .card .v { font-size: 24px; font-weight: 700; }
+  .card .l { font-size: 12px; color: #5b6475; margin-top: 2px; }
+  section { background: #fff; border-radius: 8px; padding: 16px 18px; margin-top: 16px; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+  section h2 { font-size: 16px; margin: 0 0 4px; }
+  section p.note { font-size: 13px; color: #5b6475; margin: 0 0 12px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 860px) { .grid2 { grid-template-columns: 1fr; } }
+  table { border-collapse: collapse; font-size: 12px; width: 100%; }
+  th, td { padding: 4px 6px; text-align: right; border-bottom: 1px solid #eef0f3; }
+  th:first-child, td:first-child { text-align: left; }
+  .heat td { text-align: center; min-width: 28px; }
+  .scroll { overflow-x: auto; }
+  footer { font-size: 12px; color: #5b6475; text-align: center; padding: 10px; }
+  a { color: #2b6cb0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Retail Cohort Retention</h1>
+  <p>Monthly acquisition cohorts, retention, LTV and RFM segments for a UK online gift retailer, Dec 2009 to Nov 2011. Built from SQL over the UCI Online Retail II dataset.</p>
+</header>
+<main>
+  <div class="cards" id="cards"></div>
+
+  <section>
+    <h2>Cohort retention heatmap</h2>
+    <p class="note">Share of each first-purchase cohort that ordered again N months later. December 2009 is the starting customer base, not true new customers.</p>
+    <div class="scroll"><table class="heat" id="heat"></table></div>
+  </section>
+
+  <div class="grid2">
+    <section>
+      <h2>Average retention curve (new-customer cohorts)</h2>
+      <p class="note">Weighted by cohort size; each month only uses cohorts old enough to have reached it.</p>
+      <canvas id="curve" height="220"></canvas>
+    </section>
+    <section>
+      <h2>Active customers per month: new vs returning</h2>
+      <p class="note">Returning customers carry most of the volume, and new-customer intake shrank in 2011.</p>
+      <canvas id="mix" height="220"></canvas>
+    </section>
+  </div>
+
+  <div class="grid2">
+    <section>
+      <h2>Cumulative revenue per customer (LTV) by acquisition quarter</h2>
+      <p class="note">GBP per acquired customer after 0, 3, 6 and 12 months. Cohorts Jan to Nov 2010.</p>
+      <canvas id="ltv" height="220"></canvas>
+    </section>
+    <section>
+      <h2>RFM segments (as of 1 Dec 2011)</h2>
+      <p class="note">Quintile scores on recency, order count and spend.</p>
+      <table id="rfm"></table>
+    </section>
+  </div>
+
+  <section>
+    <h2>Data cleaning log</h2>
+    <p class="note">Rows removed by each rule, in the order the rules run (see <code>sql/01_clean.sql</code>).</p>
+    <table id="clean"></table>
+  </section>
+</main>
+<footer>Data: <a href="https://archive.ics.uci.edu/dataset/502/online+retail+ii">UCI Online Retail II</a> (Chen, 2019), CC BY 4.0. Code: <a href="https://github.com/hrutishaa/RetailCohortRetention">github.com/hrutishaa/RetailCohortRetention</a></footer>
+
+<script>
+const R = window.RESULTS;
+const fmt = n => Number(n).toLocaleString('en-GB');
+const gbp = n => '£' + Number(n).toLocaleString('en-GB', {maximumFractionDigits: 0});
+const rb = R.repeat_behaviour[0];
+const curve = R.avg_retention_curve;
+const m = k => curve.find(r => r.month_index === k).retention_pct;
+const acq = R.acquisition_by_year;
+const cards = [
+  [fmt(R.customers), 'customers'],
+  [fmt(R.orders), 'orders'],
+  [gbp(rb.revenue), 'net product revenue'],
+  [m(1) + '%', 'avg month-1 retention (new cohorts)'],
+  [m(12) + '%', 'avg month-12 retention'],
+  [rb.repeat_revenue_pct + '%', 'revenue from repeat customers'],
+  [R.days_to_second_order.median + ' days', 'median time to 2nd order'],
+  [Math.round(100 * (acq[1].new_customers / acq[0].new_customers - 1)) + '%', 'new customers, Jan-Nov 2011 vs 2010'],
+];
+document.getElementById('cards').innerHTML = cards.map(([v, l]) => `<div class="card"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
+
+// heatmap
+const rows = {};
+R.retention_matrix.forEach(r => { (rows[r.cohort_month] ||= {size: r.cohort_size, cells: {}}).cells[r.month_index] = r.retention_pct; });
+const maxIdx = Math.max(...R.retention_matrix.map(r => r.month_index));
+let h = '<tr><th>Cohort</th><th>Size</th>' + Array.from({length: maxIdx + 1}, (_, i) => `<th>M${i}</th>`).join('') + '</tr>';
+Object.keys(rows).sort().forEach(c => {
+  h += `<tr><td>${c}</td><td>${rows[c].size}</td>`;
+  for (let i = 0; i <= maxIdx; i++) {
+    const v = rows[c].cells[i];
+    if (v === undefined) { h += '<td></td>'; continue; }
+    const a = i === 0 ? 0.9 : Math.min(1, v / 50);
+    h += `<td style="background:rgba(43,108,176,${a});color:${a > .55 ? '#fff' : '#1d2330'}">${i === 0 ? '' : Math.round(v)}</td>`;
+  }
+  h += '</tr>';
+});
+document.getElementById('heat').innerHTML = h;
+
+new Chart(document.getElementById('curve'), {
+  type: 'line',
+  data: { labels: curve.filter(r => r.month_index > 0).map(r => 'M' + r.month_index),
+          datasets: [{ label: 'New cohorts', data: curve.filter(r => r.month_index > 0).map(r => r.retention_pct), borderColor: '#2b6cb0', tension: .25 },
+                     { label: 'Dec 2009 base', data: R.base_cohort_curve.filter(r => r.month_index > 0).map(r => r.retention_pct), borderColor: '#c05621', borderDash: [4, 3], tension: .25 }] },
+  options: { scales: { y: { beginAtZero: true, ticks: { callback: v => v + '%' } } } }
+});
+
+new Chart(document.getElementById('mix'), {
+  type: 'bar',
+  data: { labels: R.monthly_active_mix.map(r => r.order_month),
+          datasets: [{ label: 'New', data: R.monthly_active_mix.map(r => r.new_customers), backgroundColor: '#68d391' },
+                     { label: 'Returning', data: R.monthly_active_mix.map(r => r.returning_customers), backgroundColor: '#2b6cb0' }] },
+  options: { scales: { x: { stacked: true }, y: { stacked: true } } }
+});
+
+new Chart(document.getElementById('ltv'), {
+  type: 'bar',
+  data: { labels: R.ltv_by_cohort_quarter.map(r => r.cohort_quarter + ' (' + r.customers + ')'),
+          datasets: ['ltv_m0', 'ltv_m3', 'ltv_m6', 'ltv_m12'].map((k, i) => ({ label: ['Month 0', 'Month 3', 'Month 6', 'Month 12'][i],
+            data: R.ltv_by_cohort_quarter.map(r => r[k]), backgroundColor: ['#bee3f8', '#90cdf4', '#4299e1', '#2c5282'][i] })) },
+  options: { scales: { y: { ticks: { callback: v => '£' + v } } } }
+});
+
+document.getElementById('rfm').innerHTML = '<tr><th>Segment</th><th>Customers</th><th>% cust.</th><th>Revenue</th><th>% rev.</th><th>Avg days since order</th></tr>' +
+  R.rfm_segments.map(s => `<tr><td>${s.segment}</td><td>${fmt(s.customers)}</td><td>${s.customer_pct}%</td><td>${gbp(s.revenue)}</td><td>${s.revenue_pct}%</td><td>${s.avg_recency_days}</td></tr>`).join('');
+
+const cl = R.rows_removed_by_rule;
+let ct = `<tr><th>Rule</th><th>Rows removed</th></tr><tr><td>Raw rows</td><td>${fmt(R.raw_rows)}</td></tr>`;
+Object.entries(cl).forEach(([k, v]) => ct += `<tr><td>${k.replaceAll('_', ' ')}</td><td>${fmt(v)}</td></tr>`);
+ct += `<tr><td><b>Clean rows</b></td><td><b>${fmt(R.clean_rows)}</b></td></tr>`;
+document.getElementById('clean').innerHTML = ct;
+</script>
+</body>
+</html>
